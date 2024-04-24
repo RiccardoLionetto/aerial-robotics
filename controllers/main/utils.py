@@ -13,14 +13,6 @@ def euler2rotmat(euler_angles):
     #           euler_angles: A list of 3 Euler angles [roll, pitch, yaw] in radians
     # Outputs:
     #           R: A 3x3 numpy array that represents the rotation matrix of the euler angles
-    
-    # --- YOUR CODE HERE ---
-
-    # R_roll = 
-    # R_pitch = 
-    # R_yaw = 
-
-    # R =
 
     # --- SAMPLE SOLUTION ---
 
@@ -37,7 +29,6 @@ def euler2rotmat(euler_angles):
                           [0, 0, 1]])
     
     R = R_yaw @ R_pitch @ R_roll
-    
 
     return R
 

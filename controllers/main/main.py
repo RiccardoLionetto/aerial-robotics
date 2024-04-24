@@ -293,35 +293,6 @@ class CrazyflieInDroneDome(Supervisor):
     
     def read_sensors(self):
         
-        # Sensor data call values
-        # "x_global": Global X position
-        # "y_global": Global Y position
-        # "z_global": Global Z position
-        # "roll": Roll angle (rad)
-        # "pitch": Pitch angle (rad)
-        # "yaw": Yaw angle (rad)
-        # "q_x": Quaternion x value
-        # "q_y": Quaternion y value
-        # "q_z": Quaternion z value
-        # "q_w": Quaternion w value
-        # "v_x": Global X velocity
-        # "v_y": Global Y velocity
-        # "v_z": Global Z velocity
-        # "v_forward": Forward velocity (body frame)
-        # "v_left": Leftward velocity (body frame)
-        # "v_down": Downward velocity (body frame)
-        # "ax_global": Global X acceleration
-        # "ay_global": Global Y acceleration
-        # "az_global": Global Z acceleration
-        # "range_front": Front range finder distance
-        # "range_down": Downward range finder distance
-        # "range_left": Leftward range finder distance 
-        # "range_back": Backward range finder distance
-        # "range_right": Rightward range finder distance
-        # "rate_roll": Roll rate (rad/s)
-        # "rate_pitch": Pitch rate (rad/s)
-        # "rate_yaw": Yaw rate (rad/s)
-
         # Data dictionary
         data = {}
 
@@ -538,6 +509,9 @@ if __name__ == '__main__':
 
             if control_style == 'keyboard':
                 control_commands = drone.action_from_keyboard(sensor_data)
+                if step%20==0:
+                    print(sensor_data['range_front'])# DEBUG
+
 
             # Update the drone status in simulation
             dt_ctrl = drone.getTime() - drone.PID_update_last_time
