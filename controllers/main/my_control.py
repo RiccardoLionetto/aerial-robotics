@@ -18,6 +18,8 @@ timer_done = None
 state = 0
 target = None
 path = None
+first_time = True
+time1 = 0
 SAFETY_MARGIN = 0.15     # meters
 
 index_current_setpoint = 1
@@ -60,7 +62,7 @@ map = np.zeros((int((max_x-min_x)/res_pos), int((max_y-min_y)/res_pos))) # 0 = u
 
 # This is the main function where you will implement your control algorithm
 def get_command(sensor_data, camera_data, dt):
-    global on_ground, startpos, state, path, index_current_setpoint
+    global on_ground, startpos, state, path, index_current_setpoint, first_time, time1
 
     # Open a window to display the camera image
     # NOTE: Displaying the camera image will slow down the simulation, this is just for testing
@@ -97,16 +99,28 @@ def get_command(sensor_data, camera_data, dt):
         control_command = [vx, vy, height_desired, 1]
 
         #x_position = int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))
-        if sensor_data['x_global'] >= 3.6:
+        if sensor_data['x_global'] >= 3.7:
+            #first_time = True
             state += 1
         else:   
-            if reached and (sensor_data['x_global'] < 3.6):
+            if reached and (sensor_data['x_global'] < 3.7):
                     state -= 1
 
-    elif state == 3:                        # grid search for the landing area
+    elif state == 3:                        # rotation in landing area for better mapping
+        control_command = [0.0, 0.0, height_desired, 1]
+
+        if first_time:
+            time1 = sensor_data['t']
+            first_time = False
+        
+        if sensor_data['t'] - time1 >= 8.0:
+            state += 1
+    
+    elif state == 4:                        # grid search for the landing area
         control_command = [0.0, 0.0, height_desired, 0]
         print("----- grid search -----")
         
+
         # when reached -> if final area: state+1 | else: state-1 -> rigenero nuovo path da seguire
 
     # loop(
