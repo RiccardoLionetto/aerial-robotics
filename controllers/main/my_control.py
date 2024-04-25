@@ -116,10 +116,17 @@ def get_command(sensor_data, camera_data, dt):
         if sensor_data['t'] - time1 >= 8.0:
             state += 1
     
-    elif state == 4:                        # grid search for the landing area
+    elif state == 4:                        # plan path for grid search in the landing area
         control_command = [0.0, 0.0, height_desired, 0]
-        print("----- grid search -----")
-        
+        path = single_agent_coverage(map_computed, sensor_data)
+        state += 1
+    elif state == 5:                        # follow path in the landing area
+        control_command = [0.0, 0.0, height_desired, 0]
+        print(f"Path: {path}")
+        print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
+        vx,vy, reached = follow_setpoints(sensor_data)
+        control_command = [vx, vy, height_desired, 1]
+
 
         # when reached -> if final area: state+1 | else: state-1 -> rigenero nuovo path da seguire
 
@@ -183,7 +190,7 @@ def goal_finder(start,map):
             return goal
     return
 
-def get_neighbors(cell, map):
+def get_neighbors(cell, map): # todo: try to remove diagonal neighbors
     x, y = cell
     directions = [(dx, dy) for dx in range(-1, 2) for dy in range(-1, 2) if (dx != 0 or dy != 0)]
     neighbors = [(x + dx, y + dy) for dx, dy in directions if 0 <= x + dx < int((max_x-min_x)/res_pos) and 0 <= y + dy < int((max_y-min_y)/res_pos) and map[x + dx][y + dy] >= 0.8]
@@ -408,6 +415,78 @@ def follow_setpoints(sensor_data):
 
     return vel_body[0],vel_body[1], 0 # vx,vy | reached = 1 if the drone reached the final goal, 0 otherwise
 
+
+def is_valid_cell(cell, map):
+    return 5.6/res_pos <= cell[0] < map.shape[0] and 0 <= cell[1] < map.shape[1] and map[cell] >= 0.8
+
+
+def get_neighbors_noDiag(cell, map):
+    x, y = cell
+    directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]  # Right, Left, Down, Up
+    neighbors = [(x + dx, y + dy) for dx, dy in directions if is_valid_cell((x + dx, y + dy), map)]
+    return neighbors
+
+def single_agent_coverage(map, sensor_data):
+    #start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
+    ## Initialize a stack to store the cells to visit
+    #stack = [start]
+    #
+    ## Initialize a set to keep track of visited cells
+    #visited = set()
+    #
+    ## Initialize a list to store the path
+    #path = []
+    #
+    ## Perform DFS until the stack is empty
+    #while stack:
+    #    # Pop the top cell from the stack
+    #    current = stack.pop()
+    #    
+    #    # Check if the current cell is valid and not visited yet
+    #    if current not in visited and is_valid_cell(current, map):
+    #        # Mark the current cell as visited
+    #        visited.add(current)
+    #        
+    #        # Add the current cell to the path
+    #        path.append(current)
+    #        
+    #        # Get neighboring cells
+    #        neighbors = get_neighbors_noDiag(current, map)
+    #        
+    #        # Add valid neighbors to the stack
+    #        for neighbor in neighbors:
+    #            stack.append(neighbor)
+    
+    # Get the current cell as the start position
+    start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
+    
+    # Initialize a list to store the path
+    path = [start]
+    
+    # Initialize a variable to toggle between searching rows and skipping rows
+    search_row = True
+    
+    # Iterate through all rows
+    for row in range(start[0], map.shape[0]):
+        # Toggle between searching rows and skipping rows
+        if search_row:
+            # Iterate through all columns in the row
+            for col in range(map.shape[1]):
+                cell = (row, col)
+                # Check if the current cell is valid and not visited yet
+                if is_valid_cell(cell, map):
+                    # Add the current cell to the path
+                    path.append(cell)
+                    # Get neighboring cells
+                    neighbors = get_neighbors_noDiag(cell, map)
+                    # Add valid neighbors to the path
+                    for neighbor in neighbors:
+                        path.append(neighbor)
+            search_row = False
+        else:
+            search_row = True
+
+    return path
 
 
 
