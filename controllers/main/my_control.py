@@ -3,7 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import math
-from scipy import ndimage
 import time
 from utils import euler2rotmat
 import cv2
@@ -62,7 +61,7 @@ map = np.zeros((int((max_x-min_x)/res_pos), int((max_y-min_y)/res_pos))) # 0 = u
 
 # This is the main function where you will implement your control algorithm
 def get_command(sensor_data, camera_data, dt):
-    global on_ground, startpos, state, path, index_current_setpoint, first_time, time1
+    global on_ground, startpos, state, path, index_current_setpoint, first_time, time1, height_desired
 
     # Open a window to display the camera image
     # NOTE: Displaying the camera image will slow down the simulation, this is just for testing
@@ -85,8 +84,9 @@ def get_command(sensor_data, camera_data, dt):
         control_command = [0.0, 0.0, height_desired, 1]
         if sensor_data['t'] >= 6.0:
             state += 1
-    elif state == 1:                        # call A* to generate path
-        path = astar_path(map_computed, sensor_data)
+    elif state == 1:                        # call A* to generate path (go to landing area)
+        direction = 'forth'
+        path = astar_path(map_computed, sensor_data, direction)
         print(f"Path: {path}")
         control_command = [0.0, 0.0, height_desired, 1]
         index_current_setpoint = 1
@@ -95,12 +95,11 @@ def get_command(sensor_data, camera_data, dt):
         print("----- follow_setpoint -----")
         print(f"Path: {path}")
         print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
-        vx,vy, reached = follow_setpoints(sensor_data)
+        direction = 'forth'
+        vx,vy, reached = follow_setpoints(sensor_data, direction)
         control_command = [vx, vy, height_desired, 1]
 
-        #x_position = int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))
         if sensor_data['x_global'] >= 3.7:
-            #first_time = True
             state += 1
         else:   
             if reached and (sensor_data['x_global'] < 3.7):
@@ -108,13 +107,12 @@ def get_command(sensor_data, camera_data, dt):
 
     elif state == 3:                        # rotation in landing area for better mapping
         control_command = [0.0, 0.0, height_desired, 1]
-
         if first_time:
             time1 = sensor_data['t']
             first_time = False
-        
         if sensor_data['t'] - time1 >= 8.0:
-            state += 1
+            #state += 1
+            state = 6
     
     elif state == 4:                        # plan path for grid search in the landing area
         control_command = [0.0, 0.0, height_desired, 0]
@@ -126,7 +124,40 @@ def get_command(sensor_data, camera_data, dt):
         print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         vx,vy, reached = follow_setpoints(sensor_data)
         control_command = [vx, vy, height_desired, 1]
+    
+    elif state == 6:                        # call A* to generate path (return to starting point)
+        direction = 'back'
+        path = astar_path(map_computed, sensor_data, direction)
+        print(f"Path: {path}")
+        control_command = [0.0, 0.0, height_desired, 1]
+        index_current_setpoint = 1
+        state += 1
+    elif state == 7:                        # follow path until starting pad is reached
+        print("----- going back -----")
+        print(f"Path: {path}")
+        print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
+        direction = 'back'
+        vx,vy, reached = follow_setpoints(sensor_data, direction)
+        control_command = [vx, vy, height_desired, 1]
+        if reached:
+            state += 1
 
+    elif state == 8:                        # landing
+        print("Landing")
+        if height_desired > startpos[2]+0.15:
+            height_desired -= 0.1
+        else:
+            height_desired = startpos[2]+0.05
+            print("Landed")
+            state += 1
+
+        control_command = [0.0, 0.0, height_desired, 0]
+        #if sensor_data['z_global']-startpos[2] <= 0.05:
+        #    control_command = [0.0, 0.0, 0.05, 0]
+        #    print("Landed")
+        #    state += 1
+    elif state == 9:                        # landed
+        control_command = [0.0, 0.0, 0.0, 0]
 
         # when reached -> if final area: state+1 | else: state-1 -> rigenero nuovo path da seguire
 
@@ -203,7 +234,7 @@ def reconstruct_path(came_from, current):
         path.insert(0, current)
     return path
 
-def astar_path(map_provided, sensor_data):
+def astar_path(map_provided, sensor_data, direction):
     global target
     # estraggo starting node
     # setto goal: cerco a partire dallo starting point il punto 1.8 metri più avanti che abbia casella a 0?
@@ -216,7 +247,11 @@ def astar_path(map_provided, sensor_data):
     print("astar in")
     start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
     print(f"start: {start}")
-    goal = goal_finder(start,map_provided)
+    if direction == 'forth':
+        goal = goal_finder(start,map_provided)
+    else:
+        goal = (int(np.round((startpos[0]/res_pos))),int(np.round((startpos[1]/res_pos)))) # set starting pad as goal
+
     target = goal
     print(f"goal:{goal}")
     open_set = {start}
@@ -321,8 +356,6 @@ def occupancy_map(sensor_data):
     #map_copy[map_copy <= -0.6] = 1
     #print("Map copy")
     #print(map_copy)
-    #struc = ndimage.generate_binary_structure(2, 2)
-    #obstacles_dilatated = ndimage.binary_dilation(map_copy, struc, iterations=1)#iterations=int(SAFETY_MARGIN / res_pos))
     #print("Obstacles dilatated")
     #print(obstacles_dilatated)
     #map_enlarged = np.copy(map)
@@ -372,11 +405,10 @@ def occupancy_map(sensor_data):
 
 
 
-def follow_setpoints(sensor_data):
+def follow_setpoints(sensor_data, direction):
     global path, index_current_setpoint, target
 
     # Get the goal position and drone position
-    reached = 0
     current_setpoint = path[index_current_setpoint]
     print(f"Point to reach: {current_setpoint}")
     #print(f"Dist x is {current_setpoint[0]} - {sensor_data['x_global']/res_pos}, x global:{sensor_data['x_global']}")
@@ -397,16 +429,16 @@ def follow_setpoints(sensor_data):
         print("Point reached")
         
         # Hover at the final setpoint if target is reached
-        if index_current_setpoint == math.ceil(len(path)/4): #len(path)-1: this would take the drone to the furthest point, reduce it to increase safety (paht will be recalculated earlier)
-            #if distance_drone_to_goal < 0.1:
-            reached = 1
-                #print(f"Arrived at the end: {sensor_data['x_global'], sensor_data['y_global']}")
-                #index_current_setpoint = 1
-                #current_setpoint = [0.0, 0.0, height_desired, 0.0]
-            return 0,0,1
+        if direction == 'forth':
+            if index_current_setpoint == math.ceil(len(path)/4): #len(path)-1: this would take the drone to the furthest point, reduce it to increase safety (paht will be recalculated earlier)
+                return 0,0,1
+            else:
+                index_current_setpoint += 1 # Select the next setpoint as the goal position
         else:
-            # Select the next setpoint as the goal position
-            index_current_setpoint += 1
+            if index_current_setpoint == len(path)-1: #reach the final goal (landing pad)
+                return 0,0,1
+            else:
+                index_current_setpoint += 1
     
     # transform commands from inertial frame (ground) to body frame (drone)
     euler_angles = [sensor_data['roll'], sensor_data['pitch'], sensor_data['yaw']]
