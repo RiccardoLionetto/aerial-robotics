@@ -87,14 +87,14 @@ def get_command(sensor_data, camera_data, dt):
     elif state == 1:                        # call A* to generate path (go to landing area)
         direction = 'forth'
         path = astar_path(map_computed, sensor_data, direction)
-        print(f"Path: {path}")
+        #print(f"Path: {path}")
         control_command = [0.0, 0.0, height_desired, 1]
         index_current_setpoint = 1
         state += 1
     elif state == 2:                        # follow path until euristic goal is reached
-        print("----- follow_setpoint -----")
-        print(f"Path: {path}")
-        print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
+        #print("----- follow_setpoint -----")
+        #print(f"Path: {path}")
+        #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'forth'
         vx,vy, reached = follow_setpoints(sensor_data, direction)
         control_command = [vx, vy, height_desired, 1]
@@ -107,10 +107,12 @@ def get_command(sensor_data, camera_data, dt):
 
     elif state == 3:                        # rotation in landing area for better mapping
         control_command = [0.0, 0.0, height_desired, 1]
+        
         if first_time:
             time1 = sensor_data['t']
             first_time = False
         if sensor_data['t'] - time1 >= 8.0:
+            first_time = True
             #state += 1
             state = 6
     
@@ -128,14 +130,14 @@ def get_command(sensor_data, camera_data, dt):
     elif state == 6:                        # call A* to generate path (return to starting point)
         direction = 'back'
         path = astar_path(map_computed, sensor_data, direction)
-        print(f"Path: {path}")
+        #print(f"Path: {path}")
         control_command = [0.0, 0.0, height_desired, 1]
         index_current_setpoint = 1
         state += 1
     elif state == 7:                        # follow path until starting pad is reached
-        print("----- going back -----")
-        print(f"Path: {path}")
-        print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
+        #print("----- going back -----")
+        #print(f"Path: {path}")
+        #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'back'
         vx,vy, reached = follow_setpoints(sensor_data, direction)
         control_command = [vx, vy, height_desired, 1]
@@ -143,21 +145,23 @@ def get_command(sensor_data, camera_data, dt):
             state += 1
 
     elif state == 8:                        # landing
-        print("Landing")
+
         if height_desired > startpos[2]+0.15:
-            height_desired -= 0.1
+            height_desired -= 0.02
         else:
             height_desired = startpos[2]+0.05
             print("Landed")
             state += 1
-
-        control_command = [0.0, 0.0, height_desired, 0]
-        #if sensor_data['z_global']-startpos[2] <= 0.05:
-        #    control_command = [0.0, 0.0, 0.05, 0]
-        #    print("Landed")
-        #    state += 1
-    elif state == 9:                        # landed
-        control_command = [0.0, 0.0, 0.0, 0]
+        vx,vy = keep_aligned(sensor_data, startpos)
+        control_command = [vx, vy, height_desired, 0]
+        
+    elif state == 9:                        # land after some hovering
+        control_command = [0, 0, 0.1, 0]
+        if first_time:
+            time1 = sensor_data['t']
+            first_time = False
+        if sensor_data['t'] - time1 >= 2.0:
+            control_command = [0.0, 0.0, 0.02, 0]
 
         # when reached -> if final area: state+1 | else: state-1 -> rigenero nuovo path da seguire
 
@@ -244,16 +248,16 @@ def astar_path(map_provided, sensor_data, direction):
         # genero i waypoints da seguire (coordinate)
     # finchè la lista di waypoints non è esaurita -> muovi il drone
     # qunado è esaurita -> richiama a* e genera un nuovo path
-    print("astar in")
+    #print("astar in")
     start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
-    print(f"start: {start}")
+    #print(f"start: {start}")
     if direction == 'forth':
         goal = goal_finder(start,map_provided)
     else:
         goal = (int(np.round((startpos[0]/res_pos))),int(np.round((startpos[1]/res_pos)))) # set starting pad as goal
 
     target = goal
-    print(f"goal:{goal}")
+    #print(f"goal:{goal}")
     open_set = {start}
     came_from = {}
     g_score = {start: 0}
@@ -262,7 +266,7 @@ def astar_path(map_provided, sensor_data, direction):
     while open_set:
         current = min(open_set, key=lambda x: f_score.get(x, float('inf')))
         if current == goal:
-            print("path found")
+            #print("path found")
             path = reconstruct_path(came_from, current)
             return path
 
@@ -393,10 +397,10 @@ def occupancy_map(sensor_data):
 
         plt.savefig("map.png")
         plt.close()
-        matrix = pd.DataFrame(map)
-        matrix.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map.xlsx")
-        matrix_enlarged = pd.DataFrame(map_enlarged)
-        matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
+        #matrix = pd.DataFrame(map)
+        #matrix.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map.xlsx")
+        #matrix_enlarged = pd.DataFrame(map_enlarged)
+        #matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
 
     t +=1
 
@@ -410,7 +414,7 @@ def follow_setpoints(sensor_data, direction):
 
     # Get the goal position and drone position
     current_setpoint = path[index_current_setpoint]
-    print(f"Point to reach: {current_setpoint}")
+    #print(f"Point to reach: {current_setpoint}")
     #print(f"Dist x is {current_setpoint[0]} - {sensor_data['x_global']/res_pos}, x global:{sensor_data['x_global']}")
     #print(f"Dist y is {current_setpoint[1]} - {sensor_data['y_global']/res_pos}, y global:{sensor_data['y_global']}")
 
@@ -423,10 +427,10 @@ def follow_setpoints(sensor_data, direction):
     vy = 0.25*dist_y
 
     distance_drone_to_goal = np.linalg.norm([dist_x, dist_y])
-    print(f"Distance to goal: {distance_drone_to_goal}")
+    #print(f"Distance to goal: {distance_drone_to_goal}")
     # When the drone reaches the goal setpoint, e.g., distance < 0.1m   
     if distance_drone_to_goal < 0.1: # this could be set to 2*res_pos?
-        print("Point reached")
+        #print("Point reached")
         
         # Hover at the final setpoint if target is reached
         if direction == 'forth':
@@ -521,6 +525,10 @@ def single_agent_coverage(map, sensor_data):
     return path
 
 
+def keep_aligned(sensor_data, startpos):
+    vx = (sensor_data['x_global'] - startpos[0])*0.1
+    vy = (sensor_data['y_global'] - startpos[1])*0.1
+    return vx,vy
 
 
 
