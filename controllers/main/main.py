@@ -446,11 +446,11 @@ class CrazyflieInDroneDome(Supervisor):
         drone_position = [sensor_data['x_global'], sensor_data['y_global'], sensor_data['range_down']]
 
         # Check that the drone is within the goal
-        goal_x_min = self.goal_position[0] - self.goal_width / 2
-        goal_x_max = self.goal_position[0] + self.goal_width / 2
+        goal_x_min = self.goal_position[0] - self.goal_depth / 2
+        goal_x_max = self.goal_position[0] + self.goal_depth / 2
 
-        goal_y_min = self.goal_position[1] - self.goal_depth
-        goal_y_max = self.goal_position[1] + self.goal_depth
+        goal_y_min = self.goal_position[1] - self.goal_width / 2
+        goal_y_max = self.goal_position[1] + self.goal_width / 2
 
         goal_z_min = self.goal_position[2] - self.goal_height / 2
         goal_z_max = self.goal_position[2] + self.goal_height / 2
