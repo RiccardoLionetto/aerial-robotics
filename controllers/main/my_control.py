@@ -67,6 +67,7 @@ map = np.zeros((int((max_x-min_x)/res_pos), int((max_y-min_y)/res_pos))) # 0 = u
 def get_command(sensor_data, camera_data, dt):
     global on_ground, startpos, state, path, index_current_setpoint, first_time, time1, height_desired
     global square_yaw, position_at_detection
+    clipping = True
 
     # Open a window to display the camera image
     # NOTE: Displaying the camera image will slow down the simulation, this is just for testing
@@ -87,16 +88,26 @@ def get_command(sensor_data, camera_data, dt):
 
     if ENABLE_SQUARE_DETECTION:
         # I can check here if the pink square is detected: if it's detected -> change state to A* and set pink square as goal. When it'll be reached -> remove it and go back to normal A* path
-        image, coordinates, distance = detect_pink_square(camera_data)
-        #print(f"Yaw: {sensor_data['yaw']}")
-        if coordinates[0] is not None:
-            # save current yaw to find furthest 1 in the map in that direciton
-            square_yaw = sensor_data['yaw']
+        image, coordinates_center, angle, height_square = detect_pink_square(camera_data, sensor_data)
+        if coordinates_center[0] is not None:
+            square_yaw = angle # this angle will be used to compute euristic goal to square
             position_at_detection = [sensor_data['x_global'], sensor_data['y_global']]
+            print("square_yaw °: ", square_yaw*180/np.pi)
+            # these two will be used in pair to compute the goal cell on the map
+    else:
+        square_yaw = None
+        position_at_detection = None
+
+
+        #print(f"Yaw: {sensor_data['yaw']}")
+        #if coordinates_center[0] is not None:
+        #    # save current yaw to find furthest 1 in the map in that direciton
+        #    # square_yaw = sensor_data['yaw']
+        #    position_at_detection = [sensor_data['x_global'], sensor_data['y_global']]
             #print("Pink square detected")
-            if sensor_data['t'] < 6.0:
-                print("square_yaw", square_yaw)
-                print(f"position_at_detection: {int(np.round(position_at_detection[0]/res_pos))}, {int(np.round(position_at_detection[1]/res_pos))}")
+            #if sensor_data['t'] < 6.0:
+            #    print("square_yaw", square_yaw)
+            #    print(f"position_at_detection: {int(np.round(position_at_detection[0]/res_pos))}, {int(np.round(position_at_detection[1]/res_pos))}")
          
         cv2.imshow('Camera Feed', image)
         cv2.waitKey(1)
@@ -107,7 +118,15 @@ def get_command(sensor_data, camera_data, dt):
             state += 1
     elif state == 1:                        # call A* to generate path (go to landing area)
         direction = 'forth'
-        path = astar_path(map_computed, sensor_data, direction, square_yaw, position_at_detection)
+        
+        if sensor_data['x_global']>=(2.3(1-3/100)) and sensor_data['x_global']<=(2.3(1+3/100)):
+            # recompute path to pass through the center of square (x is not clipped anymore)
+            if ENABLE_SQUARE_DETECTION:
+                clipping = False
+                height_desired = height_square
+                ENABLE_SQUARE_DETECTION = 0
+        
+        path = astar_path(map_computed, sensor_data, direction, square_yaw, position_at_detection, clipping) #clipping: if False the drone shall go through the square
         #print(f"Path: {path}")
         control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
         index_current_setpoint = 1
@@ -117,6 +136,7 @@ def get_command(sensor_data, camera_data, dt):
         #print(f"Path: {path}")
         #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'forth'
+
         vx,vy, reached = follow_setpoints(sensor_data, direction)
         control_command = [vx, vy, height_desired, MOVE_WITH_ROTATION]
 
@@ -246,6 +266,29 @@ def goal_finder(start,map):
             return goal
     return
 
+def goal_square(yaw,start,map):
+    # find the furthest point in the yaw direction
+
+    for i in range(int(range_max/res_pos), 1, -1):
+        dist = i*res_pos
+        #if start[0]+dist > int((max_x-min_x)/res_pos):
+        #    dist = int((max_x-min_x)/res_pos) - start[0] - 1 # clip to max value of the map
+
+            # make sure the current_setpoint is within the map
+        x = int(np.round((start[0] + dist*np.cos(yaw))/res_pos,0))
+        y = int(np.round((start[1] + dist*np.sin(yaw))/res_pos,0))
+        print(f"Checking cell {(x,y)}")
+        
+        if x < 0 or x >= map.shape[0] or y < 0 or y >= map.shape[1]:
+            if x < 0 or x >= map.shape[0] or y < 0 or y >= map.shape[1]:
+                continue
+
+        if x > 2.4/res_pos: # the drone will stop in the square area
+            x = int(np.round(2.4/res_pos))
+        if map[x,y] >= 0.8:
+            return (x,y) 
+        
+
 def get_neighbors(cell, map): # todo: try to remove diagonal neighbors
     x, y = cell
     directions = [(dx, dy) for dx in range(-1, 2) for dy in range(-1, 2) if (dx != 0 or dy != 0)]
@@ -259,14 +302,13 @@ def reconstruct_path(came_from, current):
         path.insert(0, current)
     return path
 
-def detect_pink_square(camera_data):
+def detect_pink_square(camera_data, sensor_data):
     # Convert RGBA to RGB
     rgb_image = camera_data[:, :, :3].copy()
     alpha_channel = camera_data[:, :, 3].copy()
 
     lower_pink = np.array([150, 0, 150])
     upper_pink = np.array([255, 100, 255])
-
 
     # Threshold the image to isolate pink color
     mask = cv2.inRange(rgb_image, lower_pink, upper_pink)
@@ -276,6 +318,7 @@ def detect_pink_square(camera_data):
     contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     x_mid = None
     y_mid = None
+    square_yaw = None
 
     for contour in contours:
         cv2.drawContours(rgb_image, contour, -1, (0, 255, 0), 4)
@@ -286,35 +329,14 @@ def detect_pink_square(camera_data):
         y_mid = int(y + h/2)
         #print(f"Center of the rectangle: {x_mid}, {y_mid}")
 
-        #cv2.imshow('Camera Feed', rgb_image)
-        #cv2.waitKey(1)
+        # yaw needed by the drone to reach the pink square
+        horiz_offset = x_mid - camera_data.shape[1]/2
+        square_yaw = sensor_data['yaw'] - np.arctan(horiz_offset/(camera_data.shape[1]/2))# * np.tan(1.5/2)
 
-        #aspect_ratio = w / h
-        #area = cv2.contourArea(contour)
-        #if 0.35 < aspect_ratio < 0.45 and area > 1000:   # Adjust these thresholds as needed
-            # Draw rectangle around the pink square
-            # cv2.rectangle(camera_data, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        #    distance = 0
-    return rgb_image, (x_mid,y_mid), None
+    return rgb_image, (x_mid,y_mid), square_yaw
 
-def goal_square(yaw,start,map):
-    # find the furthest point in the yaw direction
 
-    for dist in range(int(range_max), 1, -1):
-        #if start[0]+dist > int((max_x-min_x)/res_pos):
-        #    dist = int((max_x-min_x)/res_pos) - start[0] - 1 # clip to max value of the map
-
-            # make sure the current_setpoint is within the map
-        x = int(np.round((start[0] + dist*np.cos(yaw))/res_pos,0))
-        y = int(np.round((start[1] + dist*np.sin(yaw))/res_pos,0))
-        print(f"Checking cell {(x,y)}")
-        
-        if x < 0 or x >= map.shape[0] or y < 0 or y >= map.shape[1]:
-            break
-        if map[x,y] >= 0.8:
-            return (x,y) 
-
-def astar_path(map_provided, sensor_data, direction, square_yaw = None, position_at_detection = None):
+def astar_path(map_provided, sensor_data, direction, square_yaw, position_at_detection, clipping):
     global target
 
     start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
@@ -454,8 +476,8 @@ def occupancy_map(sensor_data):
         plt.close()
         #matrix = pd.DataFrame(map)
         #matrix.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map.xlsx")
-        #matrix_enlarged = pd.DataFrame(map_enlarged)
-        #matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
+        matrix_enlarged = pd.DataFrame(map_enlarged)
+        matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
 
     t +=1
 
