@@ -21,6 +21,9 @@ first_time = True
 time1 = 0
 square_yaw = None
 position_at_detection = None
+height_square = 0
+mean_height_square = 1
+
 SAFETY_MARGIN = 0.15     # meters
 MOVE_WITH_ROTATION = 1
 ENABLE_SQUARE_DETECTION = 1
@@ -66,7 +69,7 @@ map = np.zeros((int((max_x-min_x)/res_pos), int((max_y-min_y)/res_pos))) # 0 = u
 # This is the main function where you will implement your control algorithm
 def get_command(sensor_data, camera_data, dt):
     global on_ground, startpos, state, path, index_current_setpoint, first_time, time1, height_desired
-    global square_yaw, position_at_detection
+    global ENABLE_SQUARE_DETECTION, square_yaw, position_at_detection, height_square, mean_height_square
     clipping = True
 
     # Open a window to display the camera image
@@ -88,12 +91,18 @@ def get_command(sensor_data, camera_data, dt):
 
     if ENABLE_SQUARE_DETECTION:
         # I can check here if the pink square is detected: if it's detected -> change state to A* and set pink square as goal. When it'll be reached -> remove it and go back to normal A* path
-        image, coordinates_center, angle, height_square = detect_pink_square(camera_data, sensor_data)
+        image, coordinates_center, angle, height = detect_pink_square(camera_data, sensor_data)
         if coordinates_center[0] is not None:
             square_yaw = angle # this angle will be used to compute euristic goal to square
             position_at_detection = [sensor_data['x_global'], sensor_data['y_global']]
-            print("square_yaw °: ", square_yaw*180/np.pi)
+            if height>0.20 and height<1.5: # filter wrong detections
+                height_square = (height_square + height)/mean_height_square
+                mean_height_square += 1
+            #print("square_yaw °: ", square_yaw*180/np.pi)
             # these two will be used in pair to compute the goal cell on the map
+            
+            #cv2.imshow('Camera Feed', image)
+            #cv2.waitKey(1)
     else:
         square_yaw = None
         position_at_detection = None
@@ -109,8 +118,6 @@ def get_command(sensor_data, camera_data, dt):
             #    print("square_yaw", square_yaw)
             #    print(f"position_at_detection: {int(np.round(position_at_detection[0]/res_pos))}, {int(np.round(position_at_detection[1]/res_pos))}")
          
-        cv2.imshow('Camera Feed', image)
-        cv2.waitKey(1)
 
     if state == 0:                          # turning in place
         control_command = [0.0, 0.0, height_desired, 1]
@@ -119,7 +126,8 @@ def get_command(sensor_data, camera_data, dt):
     elif state == 1:                        # call A* to generate path (go to landing area)
         direction = 'forth'
         
-        if sensor_data['x_global']>=(2.3(1-3/100)) and sensor_data['x_global']<=(2.3(1+3/100)):
+        if sensor_data['x_global']>=(2.3*(1-3/100)) and sensor_data['x_global']<=(2.3*(1+3/100)):
+            print("Inside the last recall of cv path planning, height specified, clipping set to False")
             # recompute path to pass through the center of square (x is not clipped anymore)
             if ENABLE_SQUARE_DETECTION:
                 clipping = False
@@ -266,7 +274,7 @@ def goal_finder(start,map):
             return goal
     return
 
-def goal_square(yaw,start,map):
+def goal_square(yaw,start,map, clipping):
     # find the furthest point in the yaw direction
 
     for i in range(int(range_max/res_pos), 1, -1):
@@ -283,9 +291,11 @@ def goal_square(yaw,start,map):
             if x < 0 or x >= map.shape[0] or y < 0 or y >= map.shape[1]:
                 continue
 
-        if x > 2.4/res_pos: # the drone will stop in the square area
-            x = int(np.round(2.4/res_pos))
+        if clipping: # set to false only when drone shall pass the square
+            if x > 2.3/res_pos:
+                x = int(np.round(2.3/res_pos)) # the drone will stop at the beginning of the square area
         if map[x,y] >= 0.8:
+            print("Clipped? ", clipping)
             return (x,y) 
         
 
@@ -319,6 +329,7 @@ def detect_pink_square(camera_data, sensor_data):
     x_mid = None
     y_mid = None
     square_yaw = None
+    height_square = None
 
     for contour in contours:
         cv2.drawContours(rgb_image, contour, -1, (0, 255, 0), 4)
@@ -333,7 +344,12 @@ def detect_pink_square(camera_data, sensor_data):
         horiz_offset = x_mid - camera_data.shape[1]/2
         square_yaw = sensor_data['yaw'] - np.arctan(horiz_offset/(camera_data.shape[1]/2))# * np.tan(1.5/2)
 
-    return rgb_image, (x_mid,y_mid), square_yaw
+        # Desidered drone height based on square center
+        height_square = sensor_data['z_global'] - 0.05*(y_mid - camera_data.shape[0]/2)
+        print(f"drone height: {sensor_data['z_global']}, y_mid: {y_mid}, camera shape: {camera_data.shape[0]}")
+        print(f"Height square: {height_square}")
+
+    return rgb_image, (x_mid,y_mid), square_yaw, height_square
 
 
 def astar_path(map_provided, sensor_data, direction, square_yaw, position_at_detection, clipping):
@@ -346,7 +362,7 @@ def astar_path(map_provided, sensor_data, direction, square_yaw, position_at_det
         
         if square_yaw is not None:
             # find the furthest mapped free point, closest to the final goal area
-            goal_to_square = goal_square(square_yaw, position_at_detection, map_provided)
+            goal_to_square = goal_square(square_yaw, position_at_detection, map_provided, clipping)
             print(f"Goal to square: {goal_to_square}")
             if goal_to_square is not None:
                 goal = goal_to_square
@@ -488,9 +504,14 @@ def occupancy_map(sensor_data):
 
 def follow_setpoints(sensor_data, direction):
     global path, index_current_setpoint
-
-    # Get the goal position and drone position
-    current_setpoint = path[index_current_setpoint]
+    #print(f"Path: {path}", f"Current setpoint: {index_current_setpoint}")
+    
+    try:
+        # Get the goal position and drone position
+        current_setpoint = path[index_current_setpoint]
+    except:
+        return 0, 0, 1
+    
     #print(f"Point to reach: {current_setpoint}")
     #print(f"Dist x is {current_setpoint[0]} - {sensor_data['x_global']/res_pos}, x global:{sensor_data['x_global']}")
     #print(f"Dist y is {current_setpoint[1]} - {sensor_data['y_global']/res_pos}, y global:{sensor_data['y_global']}")
@@ -511,10 +532,17 @@ def follow_setpoints(sensor_data, direction):
         
         # Hover at the final setpoint if target is reached
         if direction == 'forth':
-            if index_current_setpoint == math.ceil(len(path)/4): #len(path)-1: this would take the drone to the furthest point, reduce it to increase safety (paht will be recalculated earlier)
-                return 0,0,1
+            if ENABLE_SQUARE_DETECTION==0:
+                if index_current_setpoint == math.ceil(len(path)/4): #len(path)-1: this would take the drone to the furthest point, reduce it to increase safety (paht will be recalculated earlier)
+                    return 0,0,1
+                else:
+                    index_current_setpoint += 1 # Select the next setpoint as the goal position
             else:
-                index_current_setpoint += 1 # Select the next setpoint as the goal position
+                if index_current_setpoint == math.ceil(len(path)/1.5): #len(path)-1: this would take the drone to the furthest point, reduce it to increase safety (paht will be recalculated earlier)
+                    return 0,0,1
+                else:
+                    index_current_setpoint += 1 # Select the next setpoint as the goal position
+        
         else:
             if index_current_setpoint == len(path)-1: #reach the final goal (landing pad)
                 return 0,0,1
