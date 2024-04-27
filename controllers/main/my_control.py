@@ -19,7 +19,11 @@ target = None
 path = None
 first_time = True
 time1 = 0
+square_yaw = None
+position_at_detection = None
 SAFETY_MARGIN = 0.15     # meters
+MOVE_WITH_ROTATION = 1
+ENABLE_SQUARE_DETECTION = 1
 
 index_current_setpoint = 1
 
@@ -62,11 +66,12 @@ map = np.zeros((int((max_x-min_x)/res_pos), int((max_y-min_y)/res_pos))) # 0 = u
 # This is the main function where you will implement your control algorithm
 def get_command(sensor_data, camera_data, dt):
     global on_ground, startpos, state, path, index_current_setpoint, first_time, time1, height_desired
+    global square_yaw, position_at_detection
 
     # Open a window to display the camera image
     # NOTE: Displaying the camera image will slow down the simulation, this is just for testing
-    # cv2.imshow('Camera Feed', camera_data)
-    # cv2.waitKey(1)
+    #cv2.imshow('Camera Feed', camera_data)
+    #cv2.waitKey(1)
     
     # Take off
     if startpos is None:
@@ -80,15 +85,31 @@ def get_command(sensor_data, camera_data, dt):
     # ---- YOUR CODE HERE ----
     map_computed = occupancy_map(sensor_data)
 
+    if ENABLE_SQUARE_DETECTION:
+        # I can check here if the pink square is detected: if it's detected -> change state to A* and set pink square as goal. When it'll be reached -> remove it and go back to normal A* path
+        image, coordinates, distance = detect_pink_square(camera_data)
+        #print(f"Yaw: {sensor_data['yaw']}")
+        if coordinates[0] is not None:
+            # save current yaw to find furthest 1 in the map in that direciton
+            square_yaw = sensor_data['yaw']
+            position_at_detection = [sensor_data['x_global'], sensor_data['y_global']]
+            #print("Pink square detected")
+            if sensor_data['t'] < 6.0:
+                print("square_yaw", square_yaw)
+                print(f"position_at_detection: {int(np.round(position_at_detection[0]/res_pos))}, {int(np.round(position_at_detection[1]/res_pos))}")
+         
+        cv2.imshow('Camera Feed', image)
+        cv2.waitKey(1)
+
     if state == 0:                          # turning in place
         control_command = [0.0, 0.0, height_desired, 1]
         if sensor_data['t'] >= 6.0:
             state += 1
     elif state == 1:                        # call A* to generate path (go to landing area)
         direction = 'forth'
-        path = astar_path(map_computed, sensor_data, direction)
+        path = astar_path(map_computed, sensor_data, direction, square_yaw, position_at_detection)
         #print(f"Path: {path}")
-        control_command = [0.0, 0.0, height_desired, 1]
+        control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
         index_current_setpoint = 1
         state += 1
     elif state == 2:                        # follow path until euristic goal is reached
@@ -97,7 +118,7 @@ def get_command(sensor_data, camera_data, dt):
         #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'forth'
         vx,vy, reached = follow_setpoints(sensor_data, direction)
-        control_command = [vx, vy, height_desired, 1]
+        control_command = [vx, vy, height_desired, MOVE_WITH_ROTATION]
 
         if sensor_data['x_global'] >= 3.7:
             state += 1
@@ -131,7 +152,7 @@ def get_command(sensor_data, camera_data, dt):
         direction = 'back'
         path = astar_path(map_computed, sensor_data, direction)
         #print(f"Path: {path}")
-        control_command = [0.0, 0.0, height_desired, 1]
+        control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
         index_current_setpoint = 1
         state += 1
     elif state == 7:                        # follow path until starting pad is reached
@@ -140,14 +161,14 @@ def get_command(sensor_data, camera_data, dt):
         #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'back'
         vx,vy, reached = follow_setpoints(sensor_data, direction)
-        control_command = [vx, vy, height_desired, 1]
+        control_command = [vx, vy, height_desired, MOVE_WITH_ROTATION]
         if reached:
             state += 1
 
     elif state == 8:                        # landing
 
         if height_desired > startpos[2]+0.15:
-            height_desired -= 0.02
+            height_desired -= 0.01
         else:
             height_desired = startpos[2]+0.05
             print("Landed")
@@ -160,7 +181,7 @@ def get_command(sensor_data, camera_data, dt):
         if first_time:
             time1 = sensor_data['t']
             first_time = False
-        if sensor_data['t'] - time1 >= 2.0:
+        if sensor_data['t'] - time1 >= 3.0:
             control_command = [0.0, 0.0, 0.02, 0]
 
         # when reached -> if final area: state+1 | else: state-1 -> rigenero nuovo path da seguire
@@ -238,26 +259,91 @@ def reconstruct_path(came_from, current):
         path.insert(0, current)
     return path
 
-def astar_path(map_provided, sensor_data, direction):
+def detect_pink_square(camera_data):
+    # Convert RGBA to RGB
+    rgb_image = camera_data[:, :, :3].copy()
+    alpha_channel = camera_data[:, :, 3].copy()
+
+    lower_pink = np.array([150, 0, 150])
+    upper_pink = np.array([255, 100, 255])
+
+
+    # Threshold the image to isolate pink color
+    mask = cv2.inRange(rgb_image, lower_pink, upper_pink)
+    _, alpha_mask = cv2.threshold(alpha_channel, 80, 255, cv2.THRESH_BINARY)
+    combined_mask = cv2.bitwise_and(mask, alpha_mask)
+    # Find contours
+    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    x_mid = None
+    y_mid = None
+
+    for contour in contours:
+        cv2.drawContours(rgb_image, contour, -1, (0, 255, 0), 4)
+        x, y, w, h = cv2.boundingRect(contour) # This will return the 4 values of the rectangle's corners
+        
+        # center of the rectangle
+        x_mid = int(x + w/2)
+        y_mid = int(y + h/2)
+        #print(f"Center of the rectangle: {x_mid}, {y_mid}")
+
+        #cv2.imshow('Camera Feed', rgb_image)
+        #cv2.waitKey(1)
+
+        #aspect_ratio = w / h
+        #area = cv2.contourArea(contour)
+        #if 0.35 < aspect_ratio < 0.45 and area > 1000:   # Adjust these thresholds as needed
+            # Draw rectangle around the pink square
+            # cv2.rectangle(camera_data, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        #    distance = 0
+    return rgb_image, (x_mid,y_mid), None
+
+def goal_square(yaw,start,map):
+    # find the furthest point in the yaw direction
+
+    for dist in range(int(range_max), 1, -1):
+        #if start[0]+dist > int((max_x-min_x)/res_pos):
+        #    dist = int((max_x-min_x)/res_pos) - start[0] - 1 # clip to max value of the map
+
+            # make sure the current_setpoint is within the map
+        x = int(np.round((start[0] + dist*np.cos(yaw))/res_pos,0))
+        y = int(np.round((start[1] + dist*np.sin(yaw))/res_pos,0))
+        print(f"Checking cell {(x,y)}")
+        
+        if x < 0 or x >= map.shape[0] or y < 0 or y >= map.shape[1]:
+            break
+        if map[x,y] >= 0.8:
+            return (x,y) 
+
+def astar_path(map_provided, sensor_data, direction, square_yaw = None, position_at_detection = None):
     global target
-    # estraggo starting node
-    # setto goal: cerco a partire dallo starting point il punto 1.8 metri più avanti che abbia casella a 0?
-    
-    # if spia = 1 
-        # algoritmo per trovare il path da seguire -> spia = 0
-        # genero i waypoints da seguire (coordinate)
-    # finchè la lista di waypoints non è esaurita -> muovi il drone
-    # qunado è esaurita -> richiama a* e genera un nuovo path
-    #print("astar in")
+
     start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
     #print(f"start: {start}")
     if direction == 'forth':
         goal = goal_finder(start,map_provided)
+        
+        if square_yaw is not None:
+            # find the furthest mapped free point, closest to the final goal area
+            goal_to_square = goal_square(square_yaw, position_at_detection, map_provided)
+            print(f"Goal to square: {goal_to_square}")
+            if goal_to_square is not None:
+                goal = goal_to_square
+                print("Goal overridden by pink square coordinates")        
+        
+        # If pink square detected: override goal
+        #distance, coordinates = detect_pink_square(camera_data)
+        #if coordinates is not None:
+        #    print("Pink square detected at coordinates:", coordinates)
+        #    #goal = (int(np.round((coordinates[0]/res_pos))),int(np.round((coordinates[1]/res_pos))))
+    
     else:
+        # First goal will be pink square
         goal = (int(np.round((startpos[0]/res_pos))),int(np.round((startpos[1]/res_pos)))) # set starting pad as goal
 
     target = goal
     #print(f"goal:{goal}")
+
+
     open_set = {start}
     came_from = {}
     g_score = {start: 0}
@@ -301,8 +387,7 @@ def enlarge_obstacles(map_array, enlargement_factor):
                         # Check if the neighboring cell is within the map boundaries (map boundaries are not enlarged)
                         if 1 < new_i < map_array.shape[0]-2 and 1 < new_j < map_array.shape[1]-1:
                             # Update the neighboring cell with the obstacle value
-                            enlarged_map[new_i, new_j] = -1#map_array[i, j] | every cell becomes full -1
-    
+                            enlarged_map[new_i, new_j] = -1#map_array[i, j] | every cell becomes full -1   
     return enlarged_map
 
 
@@ -338,47 +423,17 @@ def occupancy_map(sensor_data):
             else:
                 map[idx_x, idx_y] -= conf
                 break
-                # enlarge the obstacle for safety
-                #for k in range(1, int(SAFETY_MARGIN/res_pos)):
-                #    idx_x = int(np.round((pos_x - min_x + (i*res_pos-k)*np.cos(yaw_sensor))/res_pos,0))
-                #    idx_y = int(np.round((pos_y - min_y + (i*res_pos-k)*np.sin(yaw_sensor))/res_pos,0))
-                #    map[idx_x, idx_y] -= conf
-                #break
-    
 
     map = np.clip(map, -1, 1) # certainty can never be more than 100%
 
     # Create a map copy to enlarge obstacles
-    # Enlarge obstacles
     map_enlarged = enlarge_obstacles(map, int(SAFETY_MARGIN/res_pos))
-    #map = copy.deepcopy(map_enlarged)
-    #map = map_enlarged.copy()
-    #print("Map")
-    #print(map.astype(int))
-    #map_copy = np.copy(map)
-    #map_copy[map_copy > -0.6] = 0
-    #map_copy[map_copy <= -0.6] = 1
-    #print("Map copy")
-    #print(map_copy)
-    #print("Obstacles dilatated")
-    #print(obstacles_dilatated)
-    #map_enlarged = np.copy(map)
-    #map_enlarged[obstacles_dilatated] = -1
-    #map[obstacles_dilatated] = -1
-    #print("Map after dilatation")
-    #print(map)
-
 
     # always recreate borders and map them as obstacles
-    #map[0,:] = -1
-    #map[-1,:] = -1
-    #map[:,0] = -1
-    #map[:,-1] = -1
     map_enlarged[0,:] = -1
     map_enlarged[-1,:] = -1
     map_enlarged[:,0] = -1
     map_enlarged[:,-1] = -1
-
 
     # only plot every Nth time step (comment out if not needed)
     if t % 50 == 0:
@@ -410,7 +465,7 @@ def occupancy_map(sensor_data):
 
 
 def follow_setpoints(sensor_data, direction):
-    global path, index_current_setpoint, target
+    global path, index_current_setpoint
 
     # Get the goal position and drone position
     current_setpoint = path[index_current_setpoint]
