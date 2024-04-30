@@ -24,7 +24,7 @@ position_at_detection = None
 height_square = 0
 mean_height_square = 1
 square_region_entering = None
-clipping = False #True
+clipping = True #True
 grid_search_points = None
 visited_cells = []
 center_square = None
@@ -33,7 +33,7 @@ vx, vy = 0, 0
 
 SAFETY_MARGIN = 0.10 #0.15     # meters
 MOVE_WITH_ROTATION = 1
-ENABLE_SQUARE_DETECTION = 0
+ENABLE_SQUARE_DETECTION = 1
 
 index_current_setpoint = 1
 
@@ -136,13 +136,14 @@ def get_command(sensor_data, camera_data, dt):
         #print("A* called")
         direction = 'forth'
         
-        if ENABLE_SQUARE_DETECTION:     # TODO: da lasciare quando CV deve funzionare?
-            if sensor_data['x_global']>=2.3 and sensor_data['x_global']<=2.4 and clipping == True:
-                # make drone's camera point towards positive x
-                state = 11
-                control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
-                print("go to state 11")
-                return control_command
+        #if ENABLE_SQUARE_DETECTION:     # TODO: da lasciare quando CV deve funzionare?
+        #    print("Sensor data: ", sensor_data['x_global'], sensor_data['y_global'])
+        #    if sensor_data['x_global']>=2.15 and sensor_data['x_global']<2.4 and clipping == True:
+        #        # make drone's camera point towards positive x
+        #        state = 13
+        #        control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
+        #        print("go to state 13")
+        #        return control_command
                 #print("Inside the last recall of cv path planning, height specified, clipping set to False")
                 # recompute path to pass through the center of square (x is not clipped anymore)
                 # square_region_entering = [int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) ]
@@ -161,6 +162,17 @@ def get_command(sensor_data, camera_data, dt):
         #print("----- follow_setpoint -----")
         #print(f"Path: {path}")
         #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
+        if ENABLE_SQUARE_DETECTION:     # TODO: da lasciare quando CV deve funzionare?
+            #print("Sensor data: ", sensor_data['x_global'], sensor_data['y_global'])
+            if sensor_data['x_global']>=2.15 and sensor_data['x_global']<2.4 and clipping == True:
+                # make drone's camera point towards positive x
+                state = 13
+                control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
+                print("go to state 13")
+                return control_command
+        
+        
+        
         direction = 'forth'
 
         vx,vy, reached = follow_setpoints(sensor_data, direction)
@@ -301,7 +313,7 @@ def get_command(sensor_data, camera_data, dt):
     #    if sensor_data['t'] - time1 >= 3.0:
     #        control_command = [0.0, 0.0, 0.02, 0]
     
-    elif state == 13:                       # make the drone point towards positive x
+    elif state == 13:                       # make the drone point towards square
         print("square yaw: ", square_yaw, "yaw: ", sensor_data['yaw'])
         if square_yaw is not None:
             if (square_yaw-sensor_data['yaw']) <= 0.1 and (square_yaw-sensor_data['yaw']) >= -0.1:
@@ -315,9 +327,10 @@ def get_command(sensor_data, camera_data, dt):
     
     elif state == 14:                       # slide along y until facing the square [square_yaw ~ 0]
         control_command = [0.0, 0, height_desired, 0]
+        path = straight_path(map_computed, sensor_data)
         print("Finished. Now it has to go straight")
-        state = 1
-        clipping = False
+        state = 2
+        ENABLE_SQUARE_DETECTION = 0
 
 
 
@@ -356,6 +369,24 @@ def get_command(sensor_data, camera_data, dt):
     
     return control_command # [vx, vy, alt, yaw_rate]
 # ------------------------------------------------------------------------------------------------------------------------------------------------
+def straight_path(map_, sensor_data):
+    cells = []
+    pos_x = sensor_data['x_global']
+    pos_y = sensor_data['y_global']
+    yaw = sensor_data['yaw']
+    for i in range(int(range_max/res_pos)): # range is 2 meters
+        dist = i*res_pos
+        idx_x = int(np.round((pos_x - min_x + dist*np.cos(yaw))/res_pos,0))
+        idx_y = int(np.round((pos_y - min_y + dist*np.sin(yaw))/res_pos,0))
+
+        # make sure the current_setpoint is within the map
+        if idx_x < 0 or idx_x >= map.shape[0] or idx_y < 0 or idx_y >= map.shape[1] or dist > range_max:
+            break
+        if map_[idx_x, idx_y] >= 0.8 and (idx_x, idx_y) not in cells:
+            cells.append((idx_x, idx_y))
+    return cells
+
+
 
 def centering(sensor_data):
     global center_square
@@ -457,7 +488,7 @@ def goal_square(yaw,start,map, clipping):                   # modifico questa pe
     if yaw >= -np.pi/3 and yaw <= np.pi/3: # values outside this range are not reliable
         front_square_cell = (int(np.round(2.3/res_pos)), int(np.round(2.3*np.tan(yaw)/res_pos)))
         print(f"Front square cell: {front_square_cell}")
-        if front_square_cell[0] > 0 and front_square_cell[0] < int((max_x-min_x)/res_pos) and front_square_cell[1] > 0 and front_square_cell[1] < int((max_y-min_y)/res_pos):
+        if 0 < front_square_cell[0] < int((max_x-min_x)/res_pos) and 0 < front_square_cell[1] < int((max_y-min_y)/res_pos):
             if map[front_square_cell[0], front_square_cell[1]] < 0.8:
                 neighbors = get_neighbors(front_square_cell, map)
                 print(f"Neighbors: {neighbors}")
@@ -583,6 +614,11 @@ def astar_path(map_provided, sensor_data, direction, square_yaw, position_at_det
         if current == goal:
             #print("path found")
             path = reconstruct_path(came_from, current)
+            #print(f"A* path: {path}")
+            for point in path:
+                x, y = point
+                value = map_provided[x, y]
+                #print(f"({x}, {y}): {value}")
             return path
 
         open_set.remove(current)
@@ -600,23 +636,20 @@ def astar_path(map_provided, sensor_data, direction, square_yaw, position_at_det
 
 def enlarge_obstacles(map_array, enlargement_factor):
     enlarged_map = np.copy(map_array)
-    
+
     # Iterate over each element of the map array
-    for i in range(map_array.shape[0]):
-        for j in range(map_array.shape[1]):
+    for i in range(1, map_array.shape[0]-1):
+        for j in range(1, map_array.shape[1]-1):
             # Check if the current element is an obstacle (<= threshold)
             if map_array[i, j] <= -0.6:
                 # Enlarge the obstacle by setting neighboring cells to the obstacle value
                 for dx in range(-enlargement_factor, enlargement_factor + 1):
                     for dy in range(-enlargement_factor, enlargement_factor + 1):
-                        # Calculate the indices of the neighboring cell
-                        new_i = i + dx
-                        new_j = j + dy
-                        
+
                         # Check if the neighboring cell is within the map boundaries (map boundaries are not enlarged)
-                        if 1 < new_i < map_array.shape[0]-2 and 1 < new_j < map_array.shape[1]-1:
+                        if 0 <= i +dx < map_array.shape[0] and 0 <= j +dy < map_array.shape[1]:
                             # Update the neighboring cell with the obstacle value
-                            enlarged_map[new_i, new_j] = -1#map_array[i, j] | every cell becomes full -1   
+                            enlarged_map[i +dx, j +dy] = -1 #map_array[i, j] | every cell becomes full -1
     return enlarged_map
 
 
@@ -641,6 +674,8 @@ def occupancy_map(sensor_data):
             dist = i*res_pos
             idx_x = int(np.round((pos_x - min_x + dist*np.cos(yaw_sensor))/res_pos,0))
             idx_y = int(np.round((pos_y - min_y + dist*np.sin(yaw_sensor))/res_pos,0))
+            #idx_x = int(np.floor((pos_x - min_x + dist*np.cos(yaw_sensor))/res_pos))#,0))
+            #idx_y = int(np.floor((pos_y - min_y + dist*np.sin(yaw_sensor))/res_pos))#,0))
 
             # make sure the current_setpoint is within the map
             if idx_x < 0 or idx_x >= map.shape[0] or idx_y < 0 or idx_y >= map.shape[1] or dist > range_max:
@@ -651,6 +686,14 @@ def occupancy_map(sensor_data):
                 map[idx_x, idx_y] += conf
             else:
                 map[idx_x, idx_y] -= conf
+                #count = 0
+                #for lower_res in range(1, 3):
+                #    idx_x = int(np.round((pos_x - min_x + (dist - lower_res*res_pos/10)*np.cos(yaw_sensor))/res_pos,0))
+                #    idx_y = int(np.round((pos_y - min_y + (dist - lower_res*res_pos/10)*np.sin(yaw_sensor))/res_pos,0))
+                #    if idx_x < 0 or idx_x >= map.shape[0] or idx_y < 0 or idx_y >= map.shape[1] or dist > range_max:
+                #        if
+                #    map[idx_x, idx_y] -= conf
+
                 break
 
     map = np.clip(map, -1, 1) # certainty can never be more than 100%
@@ -683,8 +726,8 @@ def occupancy_map(sensor_data):
         plt.close()
         #matrix = pd.DataFrame(map)
         #matrix.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map.xlsx")
-        #matrix_enlarged = pd.DataFrame(map_enlarged)
-        #matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
+        matrix_enlarged = pd.DataFrame(map_enlarged)
+        matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
 
     t +=1
 
@@ -724,7 +767,7 @@ def follow_setpoints(sensor_data, direction):
     
     # Clip velocities
     max_velocity = 0.14 #0.36
-    min_velocity = 0.008
+    min_velocity = 0.014 #0.008
     if vx > 0:
         vx = min(max_velocity, max(min_velocity, vx))
     else:
@@ -734,7 +777,7 @@ def follow_setpoints(sensor_data, direction):
         vy = min(max_velocity, max(min_velocity, vy))
     else:
         vy = max(-max_velocity, min(-min_velocity, vy))
-    print(f"Vx: {vx}, Vy: {vy}")
+    #print(f"Vx: {vx}, Vy: {vy}")
     #vx, vy = math.copysign(0.06,dist_x), math.copysign(0.06,dist_y)
     #print(f"Vx now: {vx}, vx_old: {vx_old}")
     #print(f"Vy now: {vy}, vy_old: {vy_old}")
