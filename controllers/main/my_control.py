@@ -133,7 +133,7 @@ def get_command(sensor_data, camera_data, dt):
         if sensor_data['t'] >= 4.0:
             state += 1
     elif state == 1:                        # call A* to generate path (go to landing area)       
-        print("A* called")
+        #print("A* called")
         direction = 'forth'
         
         if ENABLE_SQUARE_DETECTION:     # TODO: da lasciare quando CV deve funzionare?
@@ -183,7 +183,7 @@ def get_command(sensor_data, camera_data, dt):
         if first_time:
             time1 = sensor_data['t']
             first_time = False
-        if sensor_data['t'] - time1 >= 8.0:
+        if sensor_data['t'] - time1 >= 4.0:
             first_time = True
             state += 1
             #state = 8
@@ -200,43 +200,53 @@ def get_command(sensor_data, camera_data, dt):
     elif state == 5:                        # use A* to follow the grid search path
         direction = 'grid_search'
         path = astar_path(map_computed, sensor_data, direction, square_yaw, position_at_detection, clipping)
-        print("A* path: ", path)
+        #print("A* path: ", path)
 
         control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
         state += 1
 
     elif state == 6:                        # follow path in the landing area
         #control_command = [0.0, 0.0, height_desired, 0]
-        if sensor_data['z_global']-sensor_data['range_down'] >= 0.07:
-            print("Landing pad found")
-            state += 1
-            return [0, 0, height_desired, 0]
+        #if sensor_data['z_global']-sensor_data['range_down'] >= 0.07:
+        #    print("Landing pad found")
+        #    state += 1
+        #    return [0, 0, height_desired, 0]
 
-        print(f"Path of grid search: {grid_search_points}")
-        print(f"A* path: {path}")
-        print(f"Current goal: {grid_search_points[idx_Gridpoint]}")
+        #print(f"Path of grid search: {grid_search_points}")
+        #print(f"A* path: {path}")
+        #print(f"Current goal: {grid_search_points[idx_Gridpoint]}")
+        
         #print(f"Grid search path: {path}")
-        print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
+        #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'grid_search'
         vx,vy, reached = follow_setpoints(sensor_data, direction)
         control_command = [vx, vy, height_desired, 1]
 
         if reached:
-            state -= 2
+            if sensor_data['z_global']-sensor_data['range_down'] >= 0.07:
+                print("Landing pad found")
+                state += 2 # TODO: is it fine to skip the centering?
+                return [0, 0, height_desired, 0]
+            else:
+                state -= 2
     
     elif state == 7:                        # centering on the landing pad
         if center_square is None:
+            print("Centering")
             center_square = centering(sensor_data)
             path = center_square
-
-        vx,vy, reached = follow_setpoints(sensor_data, direction)
-        if reached:
-            state += 1
-            return [0, 0, height_desired, 0]
+            vx, vy = 0, 0
+        
+        if center_square is not None:
+            direction = 'grid_search'
+            vx,vy, reached = follow_setpoints(sensor_data, direction)
+            if reached:
+                state += 1
+                return [0, 0, height_desired, 0]
         control_command = [vx, vy, height_desired, 0]
 
     elif state == 8:
-        print("Landing")
+        #print("Landing")
         if height_desired > -0.05:
             height_desired -= 0.0005
         else:
@@ -254,23 +264,24 @@ def get_command(sensor_data, camera_data, dt):
     elif state == 10:                        # call A* to generate path (return to starting point)
         direction = 'back'
         path = astar_path(map_computed, sensor_data, direction, square_yaw = None, position_at_detection = None, clipping = None)
-        print(f"Path: {path}")
+        #print(f"Path: {path}")
         control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
         index_current_setpoint = 1
         state += 1
 
     elif state == 11:                        # follow path until starting pad is reached
-        print("----- going back -----")
-        print(f"Path: {path}")
+        #print("----- going back -----")
+        #print(f"Path: {path}")
         #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'back'
         vx,vy, reached = follow_setpoints(sensor_data, direction)
         control_command = [vx, vy, height_desired, MOVE_WITH_ROTATION]
         if reached:
             state += 1
+            print("Landing")
 
     elif state == 12:                        # land in the starting pad -> FINISH
-        print("Landing")
+        #print("Landing")
         if height_desired > 0:
             height_desired -= 0.0005
         else:
@@ -390,14 +401,14 @@ def grid_search_gen(map_):
             jump = -2
         for y in range(lower, upper, jump):
             
-            print(f"Cell {(x,y)} : value {map_[x, y]}")
+            #print(f"Cell {(x,y)} : value {map_[x, y]}")
 
             #vertical_neighbors = [map_[x + dx, y + dy] for dx in [-1, 1] for dy in [-1, 0, 1] if 0 <= x + dx < int((max_x-min_x)/res_pos) and 0 <= y + dy < int((max_y-min_y)/res_pos)]
             #horizontal_neighbors = [map_[x + dx, y + dy] for dy in [-1, 1] for dx in [-1, 0, 1] if 0 <= y + dy < int((max_y-min_y)/res_pos) and 0 <= x + dx < int((max_x-min_x)/res_pos)]
 
             if map_[x, y] >= 0.8 and ((x,y) not in visited_cells): # and (vertical_neighbors[0:3].count(1)<2 or vertical_neighbors[3:6].count(1)<2) and (horizontal_neighbors[0:3].count(1)<2 or horizontal_neighbors[3:6].count(1)<2):
                 points.append((x, y))
-                print(f"Added point {(x,y)}")
+                #print(f"Added point {(x,y)}")
     # TODO: add check if around there are at least 2 free cells
     return points
 
@@ -701,18 +712,38 @@ def follow_setpoints(sensor_data, direction):
     # The drone will reach the center of the cells -> -0.5
     #dist_x = current_setpoint[0]-0.5 - sensor_data['x_global']/res_pos
     #dist_y = current_setpoint[1]-0.5 - sensor_data['y_global']/res_pos
-    dist_x = current_setpoint[0] - sensor_data['x_global']/res_pos
-    dist_y = current_setpoint[1] - sensor_data['y_global']/res_pos
+    dist_x = current_setpoint[0]+0.35 - sensor_data['x_global']/res_pos
+    dist_y = current_setpoint[1]+0.35 - sensor_data['y_global']/res_pos
+    #print(f"Curr pos: {sensor_data['x_global']/res_pos}, {sensor_data['y_global']/res_pos}, in cell {int(np.round(sensor_data['x_global']/res_pos,0)), int(np.round(sensor_data['y_global']/res_pos,0))}")
+    #print(f"Setpoint x: {current_setpoint[0]+0.4}, y: {current_setpoint[1]+0.4}")
     #vx = 0.25*dist_x
     #vy = 0.25*dist_y
+    
     vx = 0.5*dist_x
     vy = 0.5*dist_y
-
-    #Clipping
-    if vx > 0.5:
-        vx = 0.5
-    if vy > 0.5:
-        vy = 0.5
+    
+    # Clip velocities
+    max_velocity = 0.14 #0.36
+    min_velocity = 0.008
+    if vx > 0:
+        vx = min(max_velocity, max(min_velocity, vx))
+    else:
+        vx = max(-max_velocity, min(-min_velocity, vx))
+        
+    if vy > 0:
+        vy = min(max_velocity, max(min_velocity, vy))
+    else:
+        vy = max(-max_velocity, min(-min_velocity, vy))
+    print(f"Vx: {vx}, Vy: {vy}")
+    #vx, vy = math.copysign(0.06,dist_x), math.copysign(0.06,dist_y)
+    #print(f"Vx now: {vx}, vx_old: {vx_old}")
+    #print(f"Vy now: {vy}, vy_old: {vy_old}")
+    # Minimum speed
+    #vx = max(min_velocity, min(vx, 0.5))
+    #vy = max(min_velocity, min(vy, 0.5))
+    ##Clipping up
+    #vx = min(max(vx, -0.5), 0.5)
+    #vy = min(max(vy, -0.5), 0.5)
 
 
     distance_drone_to_goal = np.linalg.norm([dist_x, dist_y])

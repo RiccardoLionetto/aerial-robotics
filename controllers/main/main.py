@@ -455,6 +455,8 @@ class CrazyflieInDroneDome(Supervisor):
         goal_z_min = self.goal_position[2] - self.goal_height / 2
         goal_z_max = self.goal_position[2] + self.goal_height / 2
 
+        #print(f"Square x: {self.goal_position[0]}, y: {self.goal_position[1]}, z: {self.goal_position[2]}")
+
         if (goal_x_min < drone_position[0] < goal_x_max and goal_y_min < drone_position[1] < goal_y_max and goal_z_min < drone_position[2] < goal_z_max):
             
             if not self.reached_goal_first:
