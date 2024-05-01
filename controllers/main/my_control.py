@@ -31,13 +31,15 @@ center_square = None
 set_for_square = 0
 status_h = 0
 idx_Gridpoint = 0
+pos_square = None
+square_reached_back = False
 error_handling = 0
 vx, vy = 0, 0
 
 SAFETY_MARGIN = 0.10 #0.15     # meters
 MOVE_WITH_ROTATION = 1
-ENABLE_SQUARE_DETECTION = 0
-FILL_HOLES = 1
+ENABLE_SQUARE_DETECTION = 1
+FILL_HOLES = 0
 
 index_current_setpoint = 1
 
@@ -82,13 +84,8 @@ map_enlarged = np.zeros((int((max_x-min_x)/res_pos), int((max_y-min_y)/res_pos))
 def get_command(sensor_data, camera_data, dt):
     global on_ground, startpos, state, path, index_current_setpoint, first_time, time1, height_desired, map_enlarged, vx, vy
     global ENABLE_SQUARE_DETECTION, square_yaw, position_at_detection, height_square, mean_height_square, square_region_entering, clipping, status_h, set_for_square
-    global grid_search_points, visited_cells, idx_Gridpoint, center_square
+    global grid_search_points, visited_cells, idx_Gridpoint, center_square, pos_square, square_reached_back
     global FILL_HOLES, error_handling
-
-    # Open a window to display the camera image
-    # NOTE: Displaying the camera image will slow down the simulation, this is just for testing
-    #cv2.imshow('Camera Feed', camera_data)
-    #cv2.waitKey(1)
     
     # Take off
     if startpos is None:
@@ -107,29 +104,12 @@ def get_command(sensor_data, camera_data, dt):
         if coordinates_center[0] is not None:
             square_yaw = angle # this angle will be used to compute euristic goal to square
             position_at_detection = [sensor_data['x_global'], sensor_data['y_global']]
-            if height>0.20 and height<1.5 and mean_height_square<10000: # filter wrong detections
-                height_square = (height_square + height)/mean_height_square
-                mean_height_square += 1
-                print(f"drone height: {sensor_data['z_global']}, square height: {height_square}")
-            #print("square_yaw °: ", square_yaw*180/np.pi)
-            # these two will be used in pair to compute the goal cell on the map
             
             #cv2.imshow('Camera Feed', image)
             #cv2.waitKey(1)
     else:
         square_yaw = None
         position_at_detection = None
-
-        #print(f"Yaw: {sensor_data['yaw']}")
-        #if coordinates_center[0] is not None:
-        #    # save current yaw to find furthest 1 in the map in that direciton
-        #    # square_yaw = sensor_data['yaw']
-        #    position_at_detection = [sensor_data['x_global'], sensor_data['y_global']]
-            #print("Pink square detected")
-            #if sensor_data['t'] < 6.0:
-            #    print("square_yaw", square_yaw)
-            #    print(f"position_at_detection: {int(np.round(position_at_detection[0]/res_pos))}, {int(np.round(position_at_detection[1]/res_pos))}")
-         
 
     if state == 0:                          # turning in place
         control_command = [0.0, 0.0, height_desired, 1]
@@ -138,22 +118,6 @@ def get_command(sensor_data, camera_data, dt):
     elif state == 1:                        # call A* to generate path (go to landing area)       
         #print("A* called")
         direction = 'forth'
-        
-        #if ENABLE_SQUARE_DETECTION:     # TODO: da lasciare quando CV deve funzionare?
-        #    print("Sensor data: ", sensor_data['x_global'], sensor_data['y_global'])
-        #    if sensor_data['x_global']>=2.15 and sensor_data['x_global']<2.4 and clipping == True:
-        #        # make drone's camera point towards positive x
-        #        state = 13
-        #        control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
-        #        print("go to state 13")
-        #        return control_command
-                #print("Inside the last recall of cv path planning, height specified, clipping set to False")
-                # recompute path to pass through the center of square (x is not clipped anymore)
-                # square_region_entering = [int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) ]
-                #if ENABLE_SQUARE_DETECTION:
-                #    clipping = False
-                #    #height_desired = height_square
-                #    ENABLE_SQUARE_DETECTION = 0
         
         path = astar_path(map_computed, sensor_data, direction, square_yaw, position_at_detection, clipping) #clipping: if False the drone shall go through the square
         #print(f"Path: {path}")
@@ -173,13 +137,13 @@ def get_command(sensor_data, camera_data, dt):
                 # make drone's camera point towards positive x
                 state = 13
                 control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
-                print("go to state 13")
+                #print("go to state 13")
                 return control_command
         if set_for_square:
             image, coordinates_center, angle, height = detect_pink_square(camera_data, sensor_data)
             if coordinates_center[0] is None:
                 state = 15
-                print("go to state 15")
+                #print("go to state 15")
                 return [0, 0, height_desired, 0]
 
         direction = 'forth'
@@ -189,24 +153,13 @@ def get_command(sensor_data, camera_data, dt):
             control_command = [vx, vy, height_desired, 0]
         else:
             control_command = [vx, vy, height_desired, MOVE_WITH_ROTATION]
-
-        #if reached == 2:
-        #    index_current_setpoint = 0
-        #    state -= 1
-        #    print("back to A*: state 2")
-        #    return [0, 0, height_desired, 0]
         
         if sensor_data['x_global'] >= 3.8:
             state += 1
         else:   
             if reached and (sensor_data['x_global'] < 3.8):
-                    print("back to A*: state 2")
+                    #print("back to A*: state 2")
                     state -= 1
-        
-        #if (sensor_data['z_global']-sensor_data['range_down'] >= 0.07) and (sensor_data['x_global'] >= 3.5):
-        #    print("Landing pad found: inside state 2")
-        #    state = 7
-        #    return [0, 0, height_desired, 0]
 
     elif state == 3:                        # rotation in landing area for better mapping
         control_command = [0.0, 0.0, height_desired, 1]
@@ -221,7 +174,6 @@ def get_command(sensor_data, camera_data, dt):
     
     elif state == 4:                        # generate goals to create path for grid search in the landing area
         control_command = [0.0, 0.0, height_desired, 0]
-        #path = single_agent_coverage(map_computed, sensor_data)
         grid_search_points = grid_search_gen(map_computed)
         index_current_setpoint = 0
         idx_Gridpoint = 0
@@ -238,39 +190,21 @@ def get_command(sensor_data, camera_data, dt):
         state += 1
 
     elif state == 6:                        # follow path in the landing area
-        #control_command = [0.0, 0.0, height_desired, 0]
-        #if sensor_data['z_global']-sensor_data['range_down'] >= 0.07:
-        #    print("Landing pad found")
-        #    state += 1
-        #    return [0, 0, height_desired, 0]
-
-        #print(f"Path of grid search: {grid_search_points}")
-        #print(f"A* path: {path}")
-        #print(f"Current goal: {grid_search_points[idx_Gridpoint-1]}")
-        
-        #print(f"Grid search path: {path}")
-        #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'grid_search'
         vx,vy, reached = follow_setpoints(sensor_data, direction, map_computed)
         control_command = [vx, vy, height_desired, 1]
 
-        if reached:
-            if sensor_data['z_global']-sensor_data['range_down'] >= 0.07:
-                ##print("Landing pad found")
-                state += 2 # TODO: is it fine to skip the centering?: yes
-                return [0, 0, height_desired, 0]
-            else:
-                print("back to gridsearch: state 6")
+        if sensor_data['z_global']-sensor_data['range_down'] >= 0.07:
+            ##print("Landing pad found")
+            state += 2 # TODO: is it fine to skip the centering?: yes
+            return [vx, vy, height_desired, 0]
+        else:
+            if reached:
+            #print("back to gridsearch: state 6")
                 state -= 2
-        #elif reached == 2:
-        #    index_current_setpoint = 0
-        #    state -= 2
-        #    #idx_Gridpoint = 0
-        #    #print("back to A*: state 5")
-        #    print("back to gridsearch: state 4")
-        #    return [0, 0, height_desired, 0]
+
     
-    elif state == 7:                        # centering on the landing pad
+    elif state == 7:                        # centering on the landing pad: NOT USED
         if center_square is None:
             print("Centering: state 7")
             center_square = centering(sensor_data)
@@ -309,40 +243,64 @@ def get_command(sensor_data, camera_data, dt):
         index_current_setpoint = 1
         state += 1
 
-    elif state == 11:                        # follow path until starting pad is reached
+    elif state == 11:                        # follow path until square is reached again
         #print("----- going back -----")
         #print(f"Path: {path}")
         #print(f"Current cells: {int(np.round((sensor_data['x_global'] - min_x )/res_pos,0))}, {int(np.round((sensor_data['y_global'] - min_y )/res_pos,0))}")
         direction = 'back'
+        #print("going back to square")
         vx,vy, reached = follow_setpoints(sensor_data, direction, map_computed)
         control_command = [vx, vy, height_desired, MOVE_WITH_ROTATION]
         if reached:
             state += 1
             ##print("Landing")
 
-    elif state == 12:                        # land in the starting pad -> FINISH
-        #print("Landing")
+    elif state == 12:                        # moving up & down, side to side, like a rollercoaster
+        control_command = [0.0, 0.0, height_desired, 1]
+        #print("Rollercoaster")
+        if height_desired < 1.4 and status_h == 0:
+            height_desired += 0.005
+            #print("up")
+        else:
+            status_h = 1
+            if height_desired > 0.3:
+                #print("down")
+                height_desired -= 0.002
+            else:
+                #print("leaving state 15")
+                height_desired = 1.0
+                set_for_square = 0    
+                status_h = 0
+                state += 4
+        return  [0.0, 0.0, height_desired, 0]
+
+    elif state == 16:                        # call A* to generate path (return to starting point)
+        direction = 'back'
+        #print("A*: setting path to go back to landing pad")
+        path = astar_path(map_computed, sensor_data, direction, square_yaw = None, position_at_detection = None, clipping = None)
+        #print(f"Path: {path}")
+        control_command = [0.0, 0.0, height_desired, MOVE_WITH_ROTATION]
+        index_current_setpoint = 1
+        state += 1
+
+    elif state == 17:                        # go back to landing pad
+        direction = 'back'
+        #print("going back to landing pad")
+        vx,vy, reached = follow_setpoints(sensor_data, direction, map_computed)
+        control_command = [vx, vy, height_desired, MOVE_WITH_ROTATION]
+        if reached:
+            state += 1
+            ##print("Landing")
+
+    elif state == 18:                        # land in the starting pad -> FINISH
         if height_desired > 0:
             height_desired -= 0.0005
-        else:
-            if first_time:
-                time1 = sensor_data['t']
-                first_time = False
-            if sensor_data['t'] - time1 >= 3.0:
-                first_time = True
-        #vx,vy = keep_aligned(sensor_data, startpos)
+
         control_command = [0, 0, height_desired, 0]
-        
-    #elif state == 11:                        # land after some hovering
-    #    control_command = [0, 0, 0.1, 0]
-    #    if first_time:
-    #        time1 = sensor_data['t']
-    #        first_time = False
-    #    if sensor_data['t'] - time1 >= 3.0:
-    #        control_command = [0.0, 0.0, 0.02, 0]
+
     
     elif state == 13:                       # make the drone point towards square
-        print("square yaw: ", square_yaw, "yaw: ", sensor_data['yaw'])
+        #print("square yaw: ", square_yaw, "yaw: ", sensor_data['yaw'])
         if square_yaw is not None:
             if (square_yaw-sensor_data['yaw']) <= 0.1 and (square_yaw-sensor_data['yaw']) >= -0.1:
                 control_command = [0.0, 0.0, height_desired, 0]
@@ -357,63 +315,32 @@ def get_command(sensor_data, camera_data, dt):
     elif state == 14:                       # generate straight path
         control_command = [0.0, 0, height_desired, 0]
         path = straight_path(map_computed, sensor_data)
-        print("Finished. Now it has to go straight. Go until you don't see the square anymore, then sweep height [state 15]")
-        pos1_square = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)))
+        #print("Finished. Now it has to go straight. Go until you don't see the square anymore, then sweep height [state 15]")
+        
         state = 2
         set_for_square = 1
         ENABLE_SQUARE_DETECTION = 0
 
     elif state == 15:                       # get to square height
-        print("Sweeping height")
+        # TODO: save this position for when the drone will have to go back to the square
+        pos_square = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)))
+        #print("Sweeping height")
         if height_desired < 1.4 and status_h == 0:
             height_desired += 0.005
-            print("up")
+            #print("up")
         else:
             status_h = 1
-            if height_desired > 0.2:
-                print("down")
-                height_desired -= 0.005
+            if height_desired > 0.3:
+                #print("down")
+                height_desired -= 0.002
             else:
-                print("leaving state 15")
+                #print("leaving state 15")
                 height_desired = 1.0
                 set_for_square = 0    
-                state += 2
-        control_command = [0.0, 0.0, height_desired, 0]
+                state = 2
+        return  [0.0, 0.0, height_desired, 0]
 
 
-
-        # when reached -> if final area: state+1 | else: state-1 -> rigenero nuovo path da seguire
-
-    # loop(
-    # step 1: leggi mappa
-    # step 2: crea vettori e trova il punto da raggiungere
-    # step 3: crea comandi che lo facciano arrivare lì facendolo anche ruotare
-    
-
-    #print(sensor_data['x_global'], sensor_data['y_global'] )
-    #no = astar_path(map, sensor_data)
-
-    # Convert desired direction to velocity commands
-    # vx = np.cos(desired_direction)  # Move towards the desired direction
-    # vy = np.sin(desired_direction)  # Move towards the desired direction
-    # print(vx, vy)
-
-    #control_command = [0, 0, height_desired, 0.0]
-
-
-    # posso tenere uno yaw_rate basso ma costante così che continui sempre a ruotare. Definisco comandi di vx e vy globali e li passo
-    # con matrice di rotazione in locale per il drone (dovrebbero gestire anche lo yaw_rate)
-
-    # come ottengo la distanza tra il drone e gli ostacoli rilevati? sulla mappa vengono visualizzati nella posizione giusta, quindi in qualche
-    # modo la loro posizione e quindi la distanza dal drone
-
-    # ogni volta che devo ricalcolare le forze attrattive (serve quindi avere un punto come goal) posso prendere la posizione y corrente
-    # e settare come goal [x=3.6, y=corrente]
-
-    #control_command = [0.0, 0.0, height_desired, 0]
-    #on_ground = False
-    #map = occupancy_map(sensor_data)
-    #print(f"State: {state}")
     return control_command # [vx, vy, alt, yaw_rate]
 # ------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -497,22 +424,19 @@ def grid_search_gen(map_):
             upper = 1
             jump = -2
         for y in range(lower, upper, jump):
-            
-            #print(f"Cell {(x,y)} : value {map_[x, y]}")
-
-            #vertical_neighbors = [map_[x + dx, y + dy] for dx in [-1, 1] for dy in [-1, 0, 1] if 0 <= x + dx < int((max_x-min_x)/res_pos) and 0 <= y + dy < int((max_y-min_y)/res_pos)]
-            #horizontal_neighbors = [map_[x + dx, y + dy] for dy in [-1, 1] for dx in [-1, 0, 1] if 0 <= y + dy < int((max_y-min_y)/res_pos) and 0 <= x + dx < int((max_x-min_x)/res_pos)]
-
             if map_[x, y] >= 0.8 and ((x,y) not in visited_cells): # and (vertical_neighbors[0:3].count(1)<2 or vertical_neighbors[3:6].count(1)<2) and (horizontal_neighbors[0:3].count(1)<2 or horizontal_neighbors[3:6].count(1)<2):
                 points.append((x, y))
-                #print(f"Added point {(x,y)}")
     # TODO: add check if around there are at least 2 free cells
     return points
 
 
 def cost_estimate(start, goal):
-    #return math.sqrt( (start[0]-goal[0])**2 + (start[1]-goal[1])**2 )
-    return abs(start[0] - goal[0]) + abs(start[1] - goal[1])  # Manhattan distance
+    global grid_search_points
+    reduction_factor = 1
+    if grid_search_points is not None:
+        if goal in grid_search_points:
+            reduction_factor = 0.4
+    return abs(start[0] - goal[0]) + abs(start[1] - goal[1])*reduction_factor  # Manhattan distance
 
 def goal_finder(start,map):
     min_cost = math.inf
@@ -548,14 +472,14 @@ def goal_square(yaw,start,map, clipping):                   # modifico questa pe
     # find the furthest point in the yaw direction
 
     # This set the goal in front of the square      [check if cells around x=2.3m and y=x*tan(yaw) are free]
-    print("Yaw: ", yaw)
+    #print("Yaw: ", yaw)
     if yaw >= -np.pi/3 and yaw <= np.pi/3: # values outside this range are not reliable
         front_square_cell = (int(np.round(2.3/res_pos)), int(np.round(2.3*np.tan(yaw)/res_pos)))
-        print(f"Front square cell: {front_square_cell}")
+        #print(f"Front square cell: {front_square_cell}")
         if 0 < front_square_cell[0] < int((max_x-min_x)/res_pos) and 0 < front_square_cell[1] < int((max_y-min_y)/res_pos):
             if map[front_square_cell[0], front_square_cell[1]] < 0.8:
                 neighbors = get_neighbors(front_square_cell, map)
-                print(f"Neighbors: {neighbors}")
+                #print(f"Neighbors: {neighbors}")
                 for neigh in neighbors:
                     if map[neigh[0], neigh[1]] >= 0.8:
                         return neigh
@@ -571,7 +495,7 @@ def goal_square(yaw,start,map, clipping):                   # modifico questa pe
             # make sure the current_setpoint is within the map
         x = int(np.round((start[0] + dist*np.cos(yaw))/res_pos,0))
         y = int(np.round((start[1] + dist*np.sin(yaw))/res_pos,0))
-        print(f"Checking cell {(x,y)}")
+        #print(f"Checking cell {(x,y)}")
         
         if x < 0 or x >= map.shape[0] or y < 0 or y >= map.shape[1]:
             if x < 0 or x >= map.shape[0] or y < 0 or y >= map.shape[1]:
@@ -584,7 +508,7 @@ def goal_square(yaw,start,map, clipping):                   # modifico questa pe
             ENABLE_SQUARE_DETECTION = 0
         
         if map[x,y] >= 0.8:
-            print("Clipped? ", clipping)
+            #print("Clipped? ", clipping)
             return (x,y) 
         
 
@@ -650,7 +574,7 @@ def get_out(map_, start):
 
 
 def astar_path(map_provided, sensor_data, direction, square_yaw, position_at_detection, clipping):
-    global grid_search_points,idx_Gridpoint, target, error_handling
+    global grid_search_points,idx_Gridpoint, target, error_handling, visited_cells, pos_square, square_reached_back
 
     start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
     #print(f"start: {start}")
@@ -660,40 +584,25 @@ def astar_path(map_provided, sensor_data, direction, square_yaw, position_at_det
         if square_yaw is not None:
             # find the furthest mapped free point, closest to the final goal area
             goal_to_square = goal_square(square_yaw, position_at_detection, map_provided, clipping)
-            print(f"Goal to square: {goal_to_square}")
+            #print(f"Goal to square: {goal_to_square}")
             if goal_to_square is not None:
                 goal = goal_to_square
-                print("Goal overridden by pink square coordinates")
+                #print("Goal overridden by pink square coordinates")
 
     elif direction == 'grid_search':
         goal = grid_search_points[idx_Gridpoint]
         idx_Gridpoint += 1
-        
-        #if ERROR_HANDLING:
-        #if map_provided[start[0], start[1]] < 0.8:
-        #    print("A function to get it out from cell -1 is needed")
-        #    goal = get_out(map_provided, start)
-        #    error_handling = 1
-        #else:
-        #    error_handling = 0
-        
-        # if goal for some reason is -1, skip it and recall grid_search_gen()")
-        #if map_provided[goal[0], goal[1]] < 0.8:
-        #    print("Goal not reachable, recalculating grid search inside A*")
-        #    grid_search_points = grid_search_gen(map_provided)
-        #    idx_Gridpoint = 0
-        #    goal = grid_search_points[idx_Gridpoint]
-
-        #while map_provided[goal[0], goal[1]] <0.8 or idx_Gridpoint == len(grid_search_points):
-        #    idx_Gridpoint += 1
-        #    goal = grid_search_points[idx_Gridpoint-1]
-        
         if idx_Gridpoint == len(grid_search_points):
             print("Grid search completed")
+            visited_cells = []
             idx_Gridpoint = 0
     else:
         # TODO: First goal will be pink square, then landing paf
-        goal = (int(np.round((startpos[0]/res_pos))),int(np.round((startpos[1]/res_pos)))) # set starting pad as goal
+        if not square_reached_back and pos_square is not None:
+            goal = pos_square
+            square_reached_back = True
+        else:
+            goal = (int(np.round((startpos[0]/res_pos))),int(np.round((startpos[1]/res_pos)))) # set starting pad as goal
 
     target = goal
     #print(f"goal:{goal}")
@@ -817,34 +726,28 @@ def occupancy_map(sensor_data):
 
     if FILL_HOLES:
         map_enlarged = fill_holes(map_enlarged)
-    ## if a cell has on both sides a -1, it becomes a -1
-    #for i in range(1, map_enlarged.shape[0]-1):
-    #    for j in range(1, map_enlarged.shape[1]-1):
-    #        if map_enlarged[i, j] != -1:
-    #            if (map_enlarged[i-1, j] == -1 and map_enlarged[i+1, j] == -1) or (map_enlarged[i, j-1] == -1 and map_enlarged[i, j+1] == -1):
-    #                map_enlarged[i, j] = -1
     
     # only plot every Nth time step (comment out if not needed)
-    if t % 50 == 0:
-        plt.imshow(np.flip(map_enlarged,1), vmin=-1, vmax=1, cmap='gray', origin='lower') # flip the map to match the coordinate system
-        #plt.imshow(map, vmin=-1, vmax=1, cmap='gray', origin='lower')
-
-        # show current point in map, and target point 
-        start_x = int(np.round((sensor_data['x_global'] - min_x)/res_pos,0))
-        start_y = int(np.round((sensor_data['y_global'] - min_y)/res_pos,0))
-        if target != None:
-            rect_arr = plt.Rectangle(((max_y-min_y)/res_pos - target[1] -0.5, map_enlarged.shape[0] - target[0] -0.5), 1, 1, edgecolor='red', facecolor='none')
-            plt.gca().add_patch(rect_arr)
-        rect_beg = plt.Rectangle(((max_y-min_y)/res_pos - start_y -0.5, start_x - 0.5), 1, 1, edgecolor='red', facecolor='none')
-        plt.gca().add_patch(rect_beg)
-        
-
-        plt.savefig("map.png")
-        plt.close()
-        #matrix = pd.DataFrame(map)
-        #matrix.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map.xlsx")
-        matrix_enlarged = pd.DataFrame(map_enlarged)
-        matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
+    #if t % 50 == 0:
+    #    plt.imshow(np.flip(map_enlarged,1), vmin=-1, vmax=1, cmap='gray', origin='lower') # flip the map to match the coordinate system
+    #    #plt.imshow(map, vmin=-1, vmax=1, cmap='gray', origin='lower')
+#
+    #    # show current point in map, and target point 
+    #    start_x = int(np.round((sensor_data['x_global'] - min_x)/res_pos,0))
+    #    start_y = int(np.round((sensor_data['y_global'] - min_y)/res_pos,0))
+    #    if target != None:
+    #        rect_arr = plt.Rectangle(((max_y-min_y)/res_pos - target[1] -0.5, map_enlarged.shape[0] - target[0] -0.5), 1, 1, edgecolor='red', facecolor='none')
+    #        plt.gca().add_patch(rect_arr)
+    #    rect_beg = plt.Rectangle(((max_y-min_y)/res_pos - start_y -0.5, start_x - 0.5), 1, 1, edgecolor='red', facecolor='none')
+    #    plt.gca().add_patch(rect_beg)
+    #    
+#
+    #    plt.savefig("map.png")
+    #    plt.close()
+    #    #matrix = pd.DataFrame(map)
+    #    #matrix.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map.xlsx")
+    #    #matrix_enlarged = pd.DataFrame(map_enlarged)
+    #    #matrix_enlarged.to_excel(excel_writer="/Users/riccardolionetto/Documents/EPFL/aerial-robotics/controllers/main/map_enlarged.xlsx")
 
     t +=1
 
@@ -863,7 +766,7 @@ def follow_setpoints(sensor_data, direction, map_computed):
         #    print(f"Path not valid, recalling A*: current setpoint {current_setpoint}, map value {map_computed[current_setpoint[0], current_setpoint[1]]}")
         #    return 0, 0, 1
     except:
-        print("Exception in follow_setpoints, back to A*")
+        #print("Exception in follow_setpoints, back to A*")
         return 0, 0, 1
     
     #print(f"Point to reach: {current_setpoint}")
@@ -914,7 +817,7 @@ def follow_setpoints(sensor_data, direction, map_computed):
         if direction == 'forth':
 
             if ENABLE_SQUARE_DETECTION==0:
-                if index_current_setpoint == math.ceil(len(path)/2): #len(path)-1: this would take the drone to the furthest point, reduce it to increase safety (paht will be recalculated earlier)
+                if index_current_setpoint == math.ceil(len(path)/3): #len(path)-1: this would take the drone to the furthest point, reduce it to increase safety (paht will be recalculated earlier)
                     return 0,0,1
                 else:
                     index_current_setpoint += 1 # Select the next setpoint as the goal position
@@ -948,74 +851,11 @@ def get_neighbors_noDiag(cell, map):
     neighbors = [(x + dx, y + dy) for dx, dy in directions if is_valid_cell((x + dx, y + dy), map)]
     return neighbors
 
-def single_agent_coverage(map, sensor_data):
-    #start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
-    ## Initialize a stack to store the cells to visit
-    #stack = [start]
-    #
-    ## Initialize a set to keep track of visited cells
-    #visited = set()
-    #
-    ## Initialize a list to store the path
-    #path = []
-    #
-    ## Perform DFS until the stack is empty
-    #while stack:
-    #    # Pop the top cell from the stack
-    #    current = stack.pop()
-    #    
-    #    # Check if the current cell is valid and not visited yet
-    #    if current not in visited and is_valid_cell(current, map):
-    #        # Mark the current cell as visited
-    #        visited.add(current)
-    #        
-    #        # Add the current cell to the path
-    #        path.append(current)
-    #        
-    #        # Get neighboring cells
-    #        neighbors = get_neighbors_noDiag(current, map)
-    #        
-    #        # Add valid neighbors to the stack
-    #        for neighbor in neighbors:
-    #            stack.append(neighbor)
-    
-    # Get the current cell as the start position
-    start = (int(np.round((sensor_data['x_global'] - min_x )/res_pos,0)), int(np.round((sensor_data['y_global'] - min_y)/res_pos,0)) )
-    
-    # Initialize a list to store the path
-    path = [start]
-    
-    # Initialize a variable to toggle between searching rows and skipping rows
-    search_row = True
-    
-    # Iterate through all rows
-    for row in range(start[0], map.shape[0]):
-        # Toggle between searching rows and skipping rows
-        if search_row:
-            # Iterate through all columns in the row
-            for col in range(map.shape[1]):
-                cell = (row, col)
-                # Check if the current cell is valid and not visited yet
-                if is_valid_cell(cell, map):
-                    # Add the current cell to the path
-                    path.append(cell)
-                    # Get neighboring cells
-                    neighbors = get_neighbors_noDiag(cell, map)
-                    # Add valid neighbors to the path
-                    for neighbor in neighbors:
-                        path.append(neighbor)
-            search_row = False
-        else:
-            search_row = True
-
-    return path
-
 
 def keep_aligned(sensor_data, startpos):
     vx = (sensor_data['x_global'] - startpos[0])*0.1
     vy = (sensor_data['y_global'] - startpos[1])*0.1
     return vx,vy
-
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------
